@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fatura — RoteiroRefactoringJS (versao HTML)</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    body{margin:0;padding:20px;background:#f5f7fb;color:#0f172a}
+    .container{max-width:900px;margin:0 auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 20px rgba(15,23,42,.08)}
+    h1{margin:0 0 12px;font-size:22px}
+    pre{background:#0b1220;color:#e6eef8;padding:12px;border-radius:6px;overflow:auto;font-size:13px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    button, input[type="file"]{padding:8px 12px;border-radius:8px;border:1px solid #e6eef8;background:#f1f5f9;cursor:pointer}
+    button:hover{filter:brightness(.98)}
+    .panel{display:grid;grid-template-columns:1fr 320px;gap:16px}
+    .card{background:#fbfdff;padding:12px;border-radius:8px;border:1px solid #eef2ff}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{padding:8px;border-bottom:1px solid #eef2ff;text-align:left}
+    tfoot td{font-weight:700}
+    label{display:block;font-size:13px;margin-bottom:6px}
+    textarea{width:100%;height:150px;padding:8px;border-radius:8px;border:1px solid #e6eef8;font-family:monospace}
+    .small{font-size:13px;color:#475569}
+    .right{text-align:right}
+    @media(max-width:880px){.panel{grid-template-columns:1fr}}
+    .download-link{display:inline-block;padding:8px 10px;border-radius:6px;background:#0ea5a3;color:white;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Visualizador de Fatura (RoteiroRefactoringJS) — HTML</h1>
+    <p class="small">Use os botoes para carregar JSON ou cole/edite os arquivos na area a direita. O calculo segue a mesma logica do roteiro: precos por tipo de peca e creditos.</p>
+
+    <div class="controls">
+      <input id="filePlays" type="file" accept=".json" />
+      <input id="fileInvoices" type="file" accept=".json" />
+      <button id="btnLoadDefault">Carregar exemplo embutido</button>
+      <button id="btnRender">Gerar fatura</button>
+      <button id="btnPrint">Imprimir / Salvar PDF</button>
+      <button id="btnDownloadTxt">Exportar TXT</button>
+    </div>
+
+    <div class="panel">
+      <div>
+        <div class="card">
+          <div id="output">
+            <!-- a fatura sera renderizada aqui -->
+            <p class="small">Nenhuma fatura gerada ainda. Clique em <b>Gerar fatura</b>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <label for="playsJson">pecas (plays.json)</label>
+          <textarea id="playsJson"></textarea>
+
+          <label for="invoicesJson" style="margin-top:8px">faturas (invoices / statement.json)</label>
+          <textarea id="invoicesJson"></textarea>
+
+          <p class="small" style="margin-top:8px">Voce pode editar o JSON e clicar em <b>Gerar fatura</b>.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+/*
+  Logica do calculo adaptada do roteiro
+  - calcularTotalApresentacao
+  - calcularCredito
+  - formatacao de moeda
+*/
+
+const defaultPlays = {
+  "hamlet": {"nome":"Hamlet","tipo":"tragedia"},
+  "as-like": {"nome":"As You Like It","tipo":"comedia"},
+  "othello": {"nome":"Othello","tipo":"tragedia"}
+};
+
+const defaultInvoices = {
+  "cliente": "BigCo",
+  "apresentacoes": [
+    {"id":"hamlet","audiencia":55},
+    {"id":"as-like","audiencia":35},
+    {"id":"othello","audiencia":40}
+  ]
+};
+
+function formatarMoeda(valorCentavos) {
+  // aqui usamos divisor 100 por compatibilidade com exemplo do roteiro (valores em centavos)
+  return new Intl.NumberFormat("pt-BR", { style:"currency", currency:"BRL" }).format(valorCentavos / 100);
+}
+
+class Repositorio {
+  constructor(plays) {
+    this.pecas = plays || {};
+  }
+  getPeca(apre) {
+    return this.pecas[apre.id];
+  }
+}
+
+class ServicoCalculoFatura {
+  constructor(repo) { this.repo = repo; }
+
+  calcularTotalApresentacao(apre) {
+    const peca = this.repo.getPeca(apre);
+    if (!peca) throw new Error('Peça não encontrada: ' + apre.id);
+    let total = 0;
+    switch (peca.tipo) {
+      case "tragedia":
+        total = 40000;
+        if (apre.audiencia > 30) total += 1000 * (apre.audiencia - 30);
+        break;
+      case "comedia":
+        total = 30000;
+        if (apre.audiencia > 20) {
+          total += 10000 + 500 * (apre.audiencia - 20);
+        }
+        total += 300 * apre.audiencia;
+        break;
+      default:
+        throw new Error("Tipo de peça desconhecido: " + peca.tipo);
+    }
+    return total;
+  }
+
+  calcularCredito(apre) {
+    let creditos = Math.max(apre.audiencia - 30, 0);
+    const peca = this.repo.getPeca(apre);
+    if (peca && peca.tipo === "comedia") {
+      creditos += Math.floor(apre.audiencia / 5);
+    }
+    return creditos;
+  }
+
+  calcularTotalFatura(apresentacoes) {
+    return apresentacoes.reduce((acc, a) => acc + this.calcularTotalApresentacao(a), 0);
+  }
+
+  calcularTotalCreditos(apresentacoes) {
+    return apresentacoes.reduce((acc, a) => acc + this.calcularCredito(a), 0);
+  }
+}
+
+function renderizarFatura(invoices, plays) {
+  const repo = new Repositorio(plays);
+  const calc = new ServicoCalculoFatura(repo);
+
+  const container = document.createElement('div');
+
+  const h = document.createElement('h2');
+  h.textContent = `Fatura — ${invoices.cliente}`;
+  h.style.marginTop = '0';
+  container.appendChild(h);
+
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Peca</th><th>Valor</th><th class="right">Publico</th></tr>';
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const apre of invoices.apresentacoes) {
+    const peca = plays[apre.id];
+    const tr = document.createElement('tr');
+    const nome = peca ? peca.nome : ('(peca nao encontrada: ' + apre.id + ')');
+    const valor = formatarMoeda(calc.calcularTotalApresentacao(apre));
+    tr.innerHTML = `<td>${nome}</td><td>${valor}</td><td class="right">${apre.audiencia}</td>`;
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  const tfoot = document.createElement('tfoot');
+  const total = calc.calcularTotalFatura(invoices.apresentacoes);
+  const credits = calc.calcularTotalCreditos(invoices.apresentacoes);
+  const trFoot = document.createElement('tr');
+  trFoot.innerHTML = `<td colspan="1">Valor total</td><td colspan="2" class="right">${formatarMoeda(total)}</td>`;
+  tfoot.appendChild(trFoot);
+  const trCredits = document.createElement('tr');
+  trCredits.innerHTML = `<td colspan="1">Creditos acumulados</td><td colspan="2" class="right">${credits}</td>`;
+  tfoot.appendChild(trCredits);
+  table.appendChild(tfoot);
+
+  container.appendChild(table);
+
+  // texto detalhado (opcional)
+  const pre = document.createElement('pre');
+  pre.textContent = gerarFaturaTexto(invoices, calc, plays);
+  pre.style.marginTop = '14px';
+  container.appendChild(pre);
+
+  return container;
+}
+
+function gerarFaturaTexto(fatura, calc, plays) {
+  let out = `Fatura ${fatura.cliente}\n\n`;
+  for (let apre of fatura.apresentacoes) {
+    const peca = plays[apre.id];
+    const nome = peca ? peca.nome : apre.id;
+    const valor = formatarMoeda(calc.calcularTotalApresentacao(apre));
+    out += `  ${nome}: ${valor} (${apre.audiencia} assentos)\n`;
+  }
+  out += `\nValor total: ${formatarMoeda(calc.calcularTotalFatura(fatura.apresentacoes))}\n`;
+  out += `Créditos acumulados: ${calc.calcularTotalCreditos(fatura.apresentacoes)}\n`;
+  return out;
+}
+
+// UI wiring
+const playsTextarea = document.getElementById('playsJson');
+const invoicesTextarea = document.getElementById('invoicesJson');
+const btnLoadDefault = document.getElementById('btnLoadDefault');
+const btnRender = document.getElementById('btnRender');
+const output = document.getElementById('output');
+const btnPrint = document.getElementById('btnPrint');
+const btnDownloadTxt = document.getElementById('btnDownloadTxt');
+
+function safeParseJsonOrDefault(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return fallback;
+  }
+}
+
+// inicializa com exemplo de execução
+playsTextarea.value = JSON.stringify(defaultPlays, null, 2);
+invoicesTextarea.value = JSON.stringify(defaultInvoices, null, 2);
+
+btnLoadDefault.addEventListener('click', () => {
+  playsTextarea.value = JSON.stringify(defaultPlays, null, 2);
+  invoicesTextarea.value = JSON.stringify(defaultInvoices, null, 2);
+  output.innerHTML = `<p class="small">Exemplo carregado. Clique em <b>Gerar fatura</b>.</p>`;
+});
+
+btnRender.addEventListener('click', () => {
+  let plays, invoices;
+  try {
+    plays = JSON.parse(playsTextarea.value);
+  } catch (e) {
+    alert('JSON inválido em "plays (peças)". Verifique a sintaxe.');
+    return;
+  }
+  try {
+    invoices = JSON.parse(invoicesTextarea.value);
+  } catch (e) {
+    alert('JSON inválido em "faturas". Verifique a sintaxe.');
+    return;
+  }
+
+  try {
+    const node = renderizarFatura(invoices, plays);
+    output.innerHTML = '';
+    output.appendChild(node);
+    // guarda a fatura para download
+    output.dataset.plays = JSON.stringify(plays);
+    output.dataset.invoices = JSON.stringify(invoices);
+  } catch (err) {
+    output.innerHTML = `<pre style="color:#b91c1c">Erro: ${err.message}</pre>`;
+  }
+});
+
+btnPrint.addEventListener('click', () => window.print());
+
+btnDownloadTxt.addEventListener('click', () => {
+  // usa os dados atualmente renderizados
+  const plays = safeParseJsonOrDefault(playsTextarea.value, defaultPlays);
+  const invoices = safeParseJsonOrDefault(invoicesTextarea.value, defaultInvoices);
+  const repo = new Repositorio(plays);
+  const calc = new ServicoCalculoFatura(repo);
+  const txt = gerarFaturaTexto(invoices, calc, plays);
+  const blob = new Blob([txt], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fatura_${invoices.cliente || 'cliente'}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// inputs de arquivo (caso user carregue pecas.json e faturas.json)
+document.getElementById('filePlays').addEventListener('change', (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    playsTextarea.value = r.result;
+  };
+  r.readAsText(f);
+});
+document.getElementById('fileInvoices').addEventListener('change', (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    invoicesTextarea.value = r.result;
+  };
+  r.readAsText(f);
+});
+</script>
+</body>
+</html>
